@@ -8,5 +8,11 @@ node_modules/
 .vscode/
 
 kafka_2.13-3.4.0.tgz
-kafka_2.13-3.4.0.tgz
-kafka_2.13-3.4.0.tgz
+
+*.swp
+*.swo
+*.swm
+*.swl
+*.swk
+*.swn
+
