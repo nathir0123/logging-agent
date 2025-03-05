@@ -1,0 +1,155 @@
+version: '3.8'
+
+services:
+  # 🦓 Zookeeper (Kafka needs this)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    restart: always
+    networks:
+      - logging-net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  # 🦜 Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    restart: always
+    ports:
+      - "9092:9092"
+    networks:
+      - logging-net
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+  # 🔥 Kafka Connect for Streaming Logs
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:latest
+    container_name: kafka-connect
+    restart: always
+    ports:
+      - "8083:8083"
+    networks:
+      - logging-net
+    depends_on:
+      - kafka
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: "connect-cluster"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-status"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.storage.StringConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+  # 📊 PostgreSQL for Structured Log Storage
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    restart: always
+    networks:
+      - logging-net
+    environment:
+      POSTGRES_USER: nagent
+      POSTGRES_PASSWORD: nagent
+      POSTGRES_DB: logging_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  # 🍃 Cassandra for Scalable Log Storage
+  cassandra:
+    image: cassandra:latest
+    container_name: cassandra
+    restart: always
+    networks:
+      - logging-net
+    ports:
+      - "9042:9042"
+    environment:
+      - CASSANDRA_CLUSTER_NAME=KafkaCluster
+      - CASSANDRA_NUM_TOKENS=256
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+
+  # 🔍 Elasticsearch for Log Analysis
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.4.3
+    container_name: elasticsearch
+    restart: always
+    networks:
+      - logging-net
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+
+  # 📊 Kibana for Visualizing Logs
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.4.3
+    container_name: kibana
+    restart: always
+    networks:
+      - logging-net
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5601:5601"
+
+  # 🔄 Logstash for Kafka-to-Elasticsearch Ingestion
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.4.3
+    container_name: logstash
+    restart: always
+    networks:
+      - logging-net
+    depends_on:
+      - kafka
+      - elasticsearch
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    ports:
+      - "5044:5044"
+      - "9600:9600"
+    environment:
+      - "XPACK_MONITORING_ENABLED=false"
+
+  # 🏗️ Go Logging App (Your Application)
+  go-app:
+    build: .
+    container_name: logging-agent
+    restart: always
+    networks:
+      - logging-net
+    depends_on:
+      - kafka
+      - cassandra
+      - postgres
+    environment:
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_KEYSPACE: logs
+      KAFKA_BROKER: kafka:9092
+      DATABASE_URL: "host=postgres user=nagent password=nagent dbname=logging_db port=5432 sslmode=disable"
+
+volumes:
+  postgres-data:
+  cassandra-data:
+  kafka-data:
+  elasticsearch-data:
+
+networks:
+  logging-net:
+    driver: bridge
